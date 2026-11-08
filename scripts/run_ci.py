@@ -1,4 +1,6 @@
-"""Start the demo API, run Locust headlessly and cleanly stop the API."""
+"""One-process runner for Windows Jenkins: staging API + Locust + cleanup.
+Run: python scripts/run_ci.py --profile smoke
+"""
 import argparse
 import os
 from pathlib import Path
@@ -19,63 +21,64 @@ PROFILES = {
 
 
 def free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.bind(("127.0.0.1", 0))
+        return server.getsockname()[1]
 
 
-def wait_for_api(base, proc, timeout=25):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+def wait_until_ready(url, proc, timeout=20):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
         if proc.poll() is not None:
-            raise RuntimeError(f"API exited during startup: {proc.returncode}")
+            raise RuntimeError(f"API exited during startup; exit code={proc.returncode}")
         try:
-            with urlopen(base + "/health", timeout=1) as response:
-                if response.status == 200:
+            with urlopen(url + "/health", timeout=1) as result:
+                if result.status == 200:
                     return
-        except (URLError, OSError, TimeoutError):
+        except (URLError, TimeoutError, OSError):
             pass
-        time.sleep(0.3)
-    raise RuntimeError("API did not become healthy")
+        time.sleep(.3)
+    raise RuntimeError("Staging API failed health check within 20 seconds")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", choices=PROFILES, default="smoke")
     args = parser.parse_args()
-    REPORTS.mkdir(parents=True, exist_ok=True)
+    REPORTS.mkdir(exist_ok=True)
     users, spawn_rate, duration = PROFILES[args.profile]
     port = free_port()
     host = f"http://127.0.0.1:{port}"
-    env = dict(os.environ, PYTHONUNBUFFERED="1")
-    print(f"Starting {args.profile}: {users} users, {spawn_rate}/sec, {duration}", flush=True)
-
-    with (REPORTS / "staging-api.log").open("w", encoding="utf-8") as api_log:
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    print(f"[QA] Profile={args.profile}, users={users}, spawn-rate={spawn_rate}/s, duration={duration}", flush=True)
+    api_log = open(REPORTS / "staging-api.log", "w", encoding="utf-8")
+    api = None
+    try:
         api = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
-            cwd=ROOT, env=env, stdout=api_log, stderr=subprocess.STDOUT,
+            cwd=str(ROOT), env=env, stdout=api_log, stderr=subprocess.STDOUT,
         )
-        try:
-            wait_for_api(host, api)
-            command = [
-                sys.executable, "-m", "locust", "-f", "locustfile.py",
-                "--headless", "--host", host,
-                "--users", str(users), "--spawn-rate", str(spawn_rate),
-                "--run-time", duration, "--stop-timeout", "5",
-                "--html", "reports/locust-report.html",
-                "--csv", "reports/locust",
-            ]
-            result = subprocess.run(command, cwd=ROOT, env=env, check=False)
-            print(f"Locust exit code: {result.returncode}", flush=True)
-            return result.returncode
-        finally:
-            if api.poll() is None:
-                api.terminate()
-                try:
-                    api.wait(timeout=8)
-                except subprocess.TimeoutExpired:
-                    api.kill()
-                    api.wait(timeout=5)
+        wait_until_ready(host, api)
+        print(f"[QA] Staging API ready at {host}", flush=True)
+        cmd = [
+            sys.executable, "-m", "locust", "-f", "locustfile.py", "--headless",
+            "--host", host, "--users", str(users), "--spawn-rate", str(spawn_rate),
+            "--run-time", duration, "--stop-timeout", "5",
+            "--html", "reports/locust-report.html", "--csv", "reports/locust",
+        ]
+        result = subprocess.run(cmd, cwd=str(ROOT), env=env, check=False)
+        print(f"[QA] Locust exit code: {result.returncode}", flush=True)
+        return result.returncode
+    finally:
+        if api is not None and api.poll() is None:
+            api.terminate()
+            try:
+                api.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                api.kill()
+                api.wait(timeout=5)
+        api_log.close()
 
 
 if __name__ == "__main__":

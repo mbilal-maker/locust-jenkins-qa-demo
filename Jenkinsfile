@@ -1,6 +1,5 @@
-// Jenkins runs inside a Linux Docker container in GitHub Codespaces.
-// Requires Python 3.11+ and python3-venv installed in the Jenkins container.
-// Locust HTML and CSV reports are archived without any Grafana dependency.
+// Windows laptop / Windows Jenkins agent.
+// Jenkins plugins: Pipeline, Git, HTML Publisher.
 pipeline {
     agent any
 
@@ -10,35 +9,36 @@ pipeline {
     }
 
     parameters {
-        choice(name: 'TEST_TYPE', choices: ['smoke', 'load', 'stress'], description: 'Performance test profile')
+        choice(name: 'TEST_TYPE', choices: ['smoke', 'load', 'stress'], description: 'Locust load profile')
+    }
+
+    triggers {
+        // Localhost Jenkins cannot receive GitHub webhooks directly.
+        // Check GitHub for new commits every ~2 minutes (Jenkins H may offset the minute).
+        pollSCM('H/2 * * * *')
+        // Scheduled weekday run; omit this line if you only want push/manual runs.
+        cron('H 2 * * 1-5')
     }
 
     stages {
-        stage('Verify Python') {
+        stage('Install Python dependencies') {
             steps {
-                sh 'python3 --version'
+                bat 'python --version'
+                bat 'python -m pip install -r requirements.txt'
             }
         }
 
-        stage('Install Dependencies') {
+        stage('Start staging and run Locust') {
             steps {
-                sh '''
-                    set -eu
-                    python3 -m venv .venv
-                    .venv/bin/python -m pip install -r requirements.txt
-                '''
+                // Script starts a temporary API, health-checks, runs Locust,
+                // and always shuts down the API. Locust exit code sets build status.
+                bat 'python scripts\\run_ci.py --profile %TEST_TYPE%'
             }
         }
 
-        stage('Start API and Run Locust') {
+        stage('Production deployment (SIMULATION ONLY)') {
             steps {
-                sh '.venv/bin/python scripts/run_ci.py --profile "$TEST_TYPE"'
-            }
-        }
-
-        stage('Production Deployment Gate (Simulation)') {
-            steps {
-                echo 'PASS: Locust performance thresholds met. Production deployment would be allowed.'
+                echo 'PASS: Performance gate met. Real production deployment would go here.'
             }
         }
     }
@@ -46,6 +46,14 @@ pipeline {
     post {
         always {
             archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+            publishHTML(target: [
+                allowMissing: true,
+                alwaysLinkToLastBuild: true,
+                keepAll: true,
+                reportDir: 'reports',
+                reportFiles: 'locust-report.html',
+                reportName: 'Locust HTML Report'
+            ])
         }
     }
 }
