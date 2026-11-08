@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 app = FastAPI(title="Locust QA Jenkins Demo")
 
 # Change 0.05 to 1.20 and push to demonstrate a performance failure.
-RESPONSE_DELAY_SECONDS = 0.05
+RESPONSE_DELAY_SECONDS = 1.20
 
 # Change to True and push to demonstrate a 503/error-rate failure.
 FORCE_HTTP_ERROR = False
