@@ -1,13 +1,13 @@
-"""Tiny staging API for a QA CI/CD performance testing workshop."""
+"""Small staging API for demonstrating Locust CI/CD quality gates."""
 import asyncio
 from fastapi import FastAPI, HTTPException
 
-app = FastAPI(title="QA Locust CI/CD Demo API", version="1.0.0")
+app = FastAPI(title="Locust QA Jenkins Demo")
 
-# CHANGE THIS from 0.05 to 1.20, commit, and push to demonstrate a FAILED performance gate.
+# Change 0.05 to 1.20 and push to demonstrate a performance failure.
 RESPONSE_DELAY_SECONDS = 0.05
 
-# CHANGE THIS to True to demonstrate an HTTP-error / failure-rate gate.
+# Change to True and push to demonstrate a 503/error-rate failure.
 FORCE_HTTP_ERROR = False
 
 
@@ -17,15 +17,17 @@ async def health():
 
 
 @app.get("/api/products")
-async def get_products():
+async def products():
     await asyncio.sleep(RESPONSE_DELAY_SECONDS)
 
     if FORCE_HTTP_ERROR:
-        raise HTTPException(status_code=503, detail="Simulated service outage")
+        raise HTTPException(status_code=503, detail="Simulated API error")
 
-    products = [
-        {"id": 1, "name": "Laptop", "price": 800},
-        {"id": 2, "name": "Mouse", "price": 25},
-        {"id": 3, "name": "Keyboard", "price": 65},
-    ]
-    return {"products": products, "total": len(products)}
+    return {
+        "products": [
+            {"id": 1, "name": "Laptop", "price": 800},
+            {"id": 2, "name": "Mouse", "price": 25},
+            {"id": 3, "name": "Keyboard", "price": 65},
+        ],
+        "total": 3,
+    }
